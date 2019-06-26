@@ -1,5 +1,5 @@
 {
-  "name": "metamask-inpage-provider",
+  "name": "nifty-wallet-inpage-provider",
   "version": "1.2.3",
   "description": "An ethereum provider that connects over a WebExtension port.",
   "main": "index.js",
@@ -10,17 +10,18 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+ssh://git@github.com/MetaMask/metamask-inpage-provider.git"
+    "url": "git+ssh://git@github.com/poanetwork/nifty-wallet-inpage-provider.git"
   },
   "keywords": [
     "MetaMask",
+    "NiftyWallet",
     "Ethereum",
     "Provider"
   ],
   "bugs": {
-    "url": "https://github.com/MetaMask/metamask-inpage-provider/issues"
+    "url": "https://github.com/poanetwork/nifty-wallet-inpage-provider/issues"
   },
-  "homepage": "https://github.com/MetaMask/metamask-inpage-provider#readme",
+  "homepage": "https://github.com/poanetwork/nifty-wallet-inpage-provider#readme",
   "dependencies": {
     "json-rpc-engine": "^3.7.4",
     "json-rpc-middleware-stream": "^2.0.0",
