@@ -15,56 +15,56 @@ module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
   constructor (connectionStream, shouldSendMetadata = true) {
     super()
 
-  this.isMetaMask = true
-  this.isNiftyWallet = true
+    this.isMetaMask = true
+    this.isNiftyWallet = true
 
-  // setup connectionStream multiplexing
-  const mux = this.mux = new ObjectMultiplex()
-  pump(
-    connectionStream,
-    mux,
-    connectionStream,
-    logStreamDisconnectWarning.bind(this, 'MetaMask')
-  )
+    // setup connectionStream multiplexing
+    const mux = this.mux = new ObjectMultiplex()
+    pump(
+      connectionStream,
+      mux,
+      connectionStream,
+      logStreamDisconnectWarning.bind(this, 'MetaMask')
+    )
 
-  // subscribe to metamask public config (one-way)
-  this.publicConfigStore = new LocalStorageStore({ storageKey: 'MetaMask-Config' })
+    // subscribe to metamask public config (one-way)
+    this.publicConfigStore = new LocalStorageStore({ storageKey: 'MetaMask-Config' })
 
-  pump(
-    mux.createStream('publicConfig'),
-    asStream(this.publicConfigStore),
-    logStreamDisconnectWarning.bind(this, 'MetaMask PublicConfigStore')
-  )
+    pump(
+      mux.createStream('publicConfig'),
+      asStream(this.publicConfigStore),
+      logStreamDisconnectWarning.bind(this, 'MetaMask PublicConfigStore')
+    )
 
-  // ignore phishing warning message (handled elsewhere)
-  mux.ignoreStream('phishing')
+    // ignore phishing warning message (handled elsewhere)
+    mux.ignoreStream('phishing')
 
-  // connect to async provider
-  const jsonRpcConnection = createJsonRpcStream()
-  pump(
-    jsonRpcConnection.stream,
-    mux.createStream('provider'),
-    jsonRpcConnection.stream,
-    logStreamDisconnectWarning.bind(this, 'MetaMask RpcProvider')
-  )
+    // connect to async provider
+    const jsonRpcConnection = createJsonRpcStream()
+    pump(
+      jsonRpcConnection.stream,
+      mux.createStream('provider'),
+      jsonRpcConnection.stream,
+      logStreamDisconnectWarning.bind(this, 'MetaMask RpcProvider')
+    )
 
-  // handle sendAsync requests via dapp-side rpc engine
-  const rpcEngine = new RpcEngine()
-  rpcEngine.push(createIdRemapMiddleware())
-  rpcEngine.push(createErrorMiddleware())
-  rpcEngine.push(jsonRpcConnection.middleware)
-  this.rpcEngine = rpcEngine
+    // handle sendAsync requests via dapp-side rpc engine
+    const rpcEngine = new RpcEngine()
+    rpcEngine.push(createIdRemapMiddleware())
+    rpcEngine.push(createErrorMiddleware())
+    rpcEngine.push(jsonRpcConnection.middleware)
+    this.rpcEngine = rpcEngine
 
-  // forward json rpc notifications
-  jsonRpcConnection.events.on('notification', function(payload) {
-    this.emit('data', null, payload)
-  })
+    // forward json rpc notifications
+    jsonRpcConnection.events.on('notification', function(payload) {
+      this.emit('data', null, payload)
+    })
 
-  // Work around for https://github.com/metamask/metamask-extension/issues/5459
-  // drizzle accidently breaking the `this` reference
-  this.send = this.send.bind(this)
-  this.sendAsync = this.sendAsync.bind(this)
-}
+    // Work around for https://github.com/metamask/metamask-extension/issues/5459
+    // drizzle accidently breaking the `this` reference
+    this.send = this.send.bind(this)
+    this.sendAsync = this.sendAsync.bind(this)
+  }
 
 // Web3 1.0 provider uses `send` with a callback for async queries
 send (payload, callback) {
