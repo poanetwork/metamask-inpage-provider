@@ -9,18 +9,17 @@ const ObjectMultiplex = require('obj-multiplex')
 const util = require('util')
 const SafeEventEmitter = require('safe-event-emitter')
 
-module.exports = MetamaskInpageProvider
+module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
 
-util.inherits(MetamaskInpageProvider, SafeEventEmitter)
 
-function MetamaskInpageProvider (connectionStream) {
-  const self = this
+  constructor (connectionStream, shouldSendMetadata = true) {
+    super()
 
-  // super constructor
-  SafeEventEmitter.call(self)
+  this.isMetaMask = true
+  this.isNiftyWallet = true
 
   // setup connectionStream multiplexing
-  const mux = self.mux = new ObjectMultiplex()
+  const mux = this.mux = new ObjectMultiplex()
   pump(
     connectionStream,
     mux,
@@ -29,11 +28,11 @@ function MetamaskInpageProvider (connectionStream) {
   )
 
   // subscribe to metamask public config (one-way)
-  self.publicConfigStore = new LocalStorageStore({ storageKey: 'MetaMask-Config' })
+  this.publicConfigStore = new LocalStorageStore({ storageKey: 'MetaMask-Config' })
 
   pump(
     mux.createStream('publicConfig'),
-    asStream(self.publicConfigStore),
+    asStream(this.publicConfigStore),
     logStreamDisconnectWarning.bind(this, 'MetaMask PublicConfigStore')
   )
 
@@ -54,21 +53,21 @@ function MetamaskInpageProvider (connectionStream) {
   rpcEngine.push(createIdRemapMiddleware())
   rpcEngine.push(createErrorMiddleware())
   rpcEngine.push(jsonRpcConnection.middleware)
-  self.rpcEngine = rpcEngine
+  this.rpcEngine = rpcEngine
 
   // forward json rpc notifications
   jsonRpcConnection.events.on('notification', function(payload) {
-    self.emit('data', null, payload)
+    this.emit('data', null, payload)
   })
 
   // Work around for https://github.com/metamask/metamask-extension/issues/5459
   // drizzle accidently breaking the `this` reference
-  self.send = self.send.bind(self)
-  self.sendAsync = self.sendAsync.bind(self)
+  this.send = this.send.bind(this)
+  this.sendAsync = this.sendAsync.bind(this)
 }
 
 // Web3 1.0 provider uses `send` with a callback for async queries
-MetamaskInpageProvider.prototype.send = function (payload, callback) {
+send (payload, callback) {
   const self = this
 
   if (callback) {
@@ -80,7 +79,7 @@ MetamaskInpageProvider.prototype.send = function (payload, callback) {
 
 // handle sendAsync requests via asyncProvider
 // also remap ids inbound and outbound
-MetamaskInpageProvider.prototype.sendAsync = function (payload, cb) {
+sendAsync (payload, cb) {
   const self = this
 
   if (payload.method === 'eth_signTypedData') {
@@ -90,7 +89,7 @@ MetamaskInpageProvider.prototype.sendAsync = function (payload, cb) {
   self.rpcEngine.handle(payload, cb)
 }
 
-MetamaskInpageProvider.prototype._sendSync = function (payload) {
+_sendSync (payload) {
   const self = this
 
   let selectedAddress
@@ -135,13 +134,11 @@ MetamaskInpageProvider.prototype._sendSync = function (payload) {
   }
 }
 
-MetamaskInpageProvider.prototype.isConnected = function () {
+isConnected () {
   return true
 }
 
-MetamaskInpageProvider.prototype.isMetaMask = true
-
-MetamaskInpageProvider.prototype.isNiftyWallet = true
+}
 
 // util
 

@@ -23,6 +23,7 @@
   },
   "homepage": "https://github.com/poanetwork/nifty-wallet-inpage-provider#readme",
   "dependencies": {
+    "fast-deep-equal": "^3.1.1",
     "json-rpc-engine": "^3.7.4",
     "json-rpc-middleware-stream": "^2.0.0",
     "loglevel": "^1.6.1",
