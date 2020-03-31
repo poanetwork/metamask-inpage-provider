@@ -18,6 +18,15 @@ const {
   makeThenable,
 } = require('./src/utils')
 
+// resolve response.result, reject errors
+const getRpcPromiseCallback = (resolve, reject) => (error, response) => {
+  error || response.error
+    ? reject(error || response.error)
+    : Array.isArray(response)
+      ? resolve(response)
+      : resolve(response.result)
+}
+
 module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
 
   constructor (connectionStream, shouldSendMetadata = true) {
@@ -42,6 +51,8 @@ module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
       accounts: undefined,
       isUnlocked: undefined,
     }
+
+    this._metamask = getExperimentalApi(this)
 
     // public state
     this.selectedAddress = null
@@ -116,6 +127,12 @@ module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
     jsonRpcConnection.events.on('notification', function(payload) {
       this.emit('data', null, payload)
     })
+
+    // indicate that we've connected, for EIP-1193 compliance
+    setTimeout(() => this.emit('connect'))
+
+    // TODO:deprecate:2020-Q1
+    this._web3Ref = undefined
   }
 
   /**
