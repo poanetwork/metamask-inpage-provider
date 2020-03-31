@@ -160,6 +160,22 @@ module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
 
     // TODO:deprecate:2020-Q1
     this._web3Ref = undefined
+
+    // TODO:deprecate:2020-Q1
+    // give the dapps control of a refresh they can toggle this off on the window.ethereum
+    // this will be default true so it does not break any old apps.
+    this.autoRefreshOnNetworkChange = true
+
+    // TODO:deprecate:2020-Q1
+    // wait a second to attempt to send this, so that the warning can be silenced
+    // moved this here because there's another warning in .enable() discouraging
+    // the use thereof per EIP 1102
+    setTimeout(() => {
+      if (this.autoRefreshOnNetworkChange && !this._state.sentWarnings.autoReload) {
+        log.warn(messages.warnings.autoReloadDeprecation)
+        this._state.sentWarnings.autoReload = true
+      }
+    }, 1000)
   }
 
   /**
