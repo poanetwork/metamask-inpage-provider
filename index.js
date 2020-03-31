@@ -9,7 +9,6 @@ const SafeEventEmitter = require('safe-event-emitter')
 const dequal = require('fast-deep-equal')
 const { ethErrors } = require('eth-json-rpc-errors')
 const log = require('loglevel')
-const util = require('util')
 
 const messages = require('./src/messages')
 const {
@@ -59,12 +58,14 @@ module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
     this.networkVersion = undefined
     this.chainId = undefined
 
-    // Work around for https://github.com/metamask/metamask-extension/issues/5459
-    // drizzle accidently breaking the `this` reference
-    this.send = this.send.bind(this)
-    this.sendAsync = this.sendAsync.bind(this)
+    // bind functions (to prevent e.g. web3@1.x from making unbound calls)
+    this._handleAccountsChanged = this._handleAccountsChanged.bind(this)
     this._handleDisconnect = this._handleDisconnect.bind(this)
     this._sendAsync = this._sendAsync.bind(this)
+    this._sendSync = this._sendSync.bind(this)
+    this.enable = this.enable.bind(this)
+    this.send = this.send.bind(this)
+    this.sendAsync = this.sendAsync.bind(this)
 
     // setup connectionStream multiplexing
     const mux = this.mux = new ObjectMultiplex()
@@ -79,6 +80,10 @@ module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
     this.publicConfigStore = new ObservableStore({ storageKey: 'MetaMask-Config' })
 
     this.publicConfigStore.subscribe(state => {
+      if ('selectedAddress' in state && state.selectedAddress !== this.selectedAddress) {
+        this.selectedAddress = state.selectedAddress
+      }
+
       // Emit chainChanged event on chain change
       if ('chainId' in state && state.chainId !== this.chainId) {
         this.chainId = state.chainId
@@ -123,9 +128,14 @@ module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
     rpcEngine.push(jsonRpcConnection.middleware)
     this.rpcEngine = rpcEngine
 
-    // forward json rpc notifications
-    jsonRpcConnection.events.on('notification', function(payload) {
-      this.emit('data', null, payload)
+    // json rpc notification listener
+    jsonRpcConnection.events.on('notification', payload => {
+      if (payload.method === 'wallet_accountsChanged') {
+        this._handleAccountsChanged(payload.result)
+      } else if (payload.method === 'eth_subscription') {
+        // EIP 1193 subscriptions, per eth-json-rpc-filters/subscriptionManager
+        this.emit('notification', payload.params.result)
+      }
     })
 
     // indicate that we've connected, for EIP-1193 compliance
@@ -157,6 +167,30 @@ module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
     } else {
       return self._sendSync(payload)
     }
+  }
+
+  /**
+   * Deprecated.
+   * Equivalent to: ethereum.send('eth_requestAccounts')
+   *
+   * @returns {Promise<Array<string>>} - A promise that resolves to an array of addresses.
+   */
+  enable () {
+
+    if (!this._state.sentWarnings.enable) {
+      log.warn(messages.warnings.enableDeprecation)
+      this._state.sentWarnings.enable = true
+    }
+    return new Promise((resolve, reject) => {
+      try {
+        this._sendAsync(
+          { method: 'eth_requestAccounts', params: [] },
+          getRpcPromiseCallback(resolve, reject),
+        )
+      } catch (error) {
+        reject(error)
+      }
+    })
   }
 
   // handle sendAsync requests via asyncProvider
@@ -266,6 +300,54 @@ module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
       })
     }
     this._state.isConnected = false
+  }
+
+  /**
+   * Called when accounts may have changed.
+   */
+  _handleAccountsChanged (accounts, isEthAccounts = false, isInternal = false) {
+
+    // defensive programming
+    if (!Array.isArray(accounts)) {
+      log.error(
+        'MetaMask: Received non-array accounts parameter. Please report this bug.',
+        accounts,
+      )
+      accounts = []
+    }
+
+    // emit accountsChanged if anything about the accounts array has changed
+    if (!dequal(this._state.accounts, accounts)) {
+
+      // we should always have the correct accounts even before eth_accounts
+      // returns, except in cases where isInternal is true
+      if (isEthAccounts && this._state.accounts !== undefined && !isInternal) {
+        log.error(
+          `MetaMask: 'eth_accounts' unexpectedly updated accounts. Please report this bug.`,
+          accounts,
+        )
+      }
+
+      this.emit('accountsChanged', accounts)
+      this._state.accounts = accounts
+    }
+
+    // handle selectedAddress
+    if (this.selectedAddress !== accounts[0]) {
+      this.selectedAddress = accounts[0] || null
+    }
+
+    // TODO:deprecate:2020-Q1
+    // handle web3
+    if (this._web3Ref) {
+      this._web3Ref.defaultAccount = this.selectedAddress
+    } else if (
+      window.web3 &&
+      window.web3.eth &&
+      typeof window.web3.eth === 'object'
+    ) {
+      window.web3.eth.defaultAccount = this.selectedAddress
+    }
   }
 }
 
