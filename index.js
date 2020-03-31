@@ -80,6 +80,23 @@ module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
     this.publicConfigStore = new ObservableStore({ storageKey: 'MetaMask-Config' })
 
     this.publicConfigStore.subscribe(state => {
+      if ('isUnlocked' in state && state.isUnlocked !== this._state.isUnlocked) {
+        this._state.isUnlocked = state.isUnlocked
+        if (!this._state.isUnlocked) {
+          // accounts are never exposed when the extension is locked
+          this._handleAccountsChanged([])
+        } else {
+          // this will get the exposed accounts, if any
+          try {
+            this._sendAsync(
+              { method: 'eth_accounts', params: [] },
+              () => {},
+              true, // indicating that eth_accounts _should_ update accounts
+            )
+          } catch (_) {}
+        }
+      }
+
       if ('selectedAddress' in state && state.selectedAddress !== this.selectedAddress) {
         this.selectedAddress = state.selectedAddress
       }
@@ -205,27 +222,30 @@ module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
     self.rpcEngine.handle(payload, cb)
   }
 
+  /**
+   * TODO:deprecate:2020-Q1
+   * Internal backwards compatibility method.
+   */
   _sendSync (payload) {
-    const self = this
 
-    let selectedAddress
-    let result = null
+    if (!this._state.sentWarnings.sendSync) {
+      log.warn(messages.warnings.sendSyncDeprecation)
+      this._state.sentWarnings.sendSync = true
+    }
+
+    let result
     switch (payload.method) {
 
       case 'eth_accounts':
-        // read from localStorage
-        selectedAddress = self.publicConfigStore.getState().selectedAddress
-        result = selectedAddress ? [selectedAddress] : []
+        result = this.selectedAddress ? [this.selectedAddress] : []
         break
 
       case 'eth_coinbase':
-        // read from localStorage
-        selectedAddress = self.publicConfigStore.getState().selectedAddress
-        result = selectedAddress || null
+        result = this.selectedAddress || null
         break
 
       case 'eth_uninstallFilter':
-        self.sendAsync(payload, () => {})
+        this._sendAsync(payload, () => {})
         result = true
         break
 
@@ -233,20 +253,16 @@ module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
         result = this.networkVersion || null
         break
 
-      // throw not-supported Error
       default:
-        var link = 'https://github.com/MetaMask/faq/blob/master/DEVELOPERS.md#dizzy-all-async---think-of-metamask-as-a-light-client'
-        var message = `The MetaMask Web3 object does not support synchronous methods like ${payload.method} without a callback parameter. See ${link} for details.`
-        throw new Error(message)
-
+        throw new Error(messages.errors.unsupportedSync(payload.method))
     }
 
-    // return the result
-    return {
+    // looks like a plain object, but behaves like a Promise if someone calls .then on it :evil_laugh:
+    return makeThenable({
       id: payload.id,
       jsonrpc: payload.jsonrpc,
-      result: result,
-    }
+      result,
+    }, 'result')
   }
 
   /**
