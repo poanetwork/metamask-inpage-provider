@@ -210,16 +210,20 @@ module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
     })
   }
 
-  // handle sendAsync requests via asyncProvider
-  // also remap ids inbound and outbound
+  /**
+   * Deprecated.
+   * Backwards compatibility. ethereum.send() with callback.
+   *
+   * @param {Object} payload - The RPC request object.
+   * @param {Function} callback - The callback function.
+   */
   sendAsync (payload, cb) {
-    const self = this
 
-    if (payload.method === 'eth_signTypedData') {
-      console.warn('MetaMask: This experimental version of eth_signTypedData will be deprecated in the next release in favor of the standard as defined in EIP-712. See https://git.io/fNzPl for more information on the new standard.')
+    if (!this._state.sentWarnings.sendAsync) {
+      log.warn(messages.warnings.sendAsyncDeprecation)
+      this._state.sentWarnings.sendAsync = true
     }
-
-    self.rpcEngine.handle(payload, cb)
+    this._sendAsync(payload, cb)
   }
 
   /**
