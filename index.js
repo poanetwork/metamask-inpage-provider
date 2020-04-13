@@ -13,22 +13,26 @@ const log = require('loglevel')
 const messages = require('./src/messages')
 const {
   createErrorMiddleware,
+  EMITTED_NOTIFICATIONS,
   logStreamDisconnectWarning,
   makeThenable,
+  NOOP,
 } = require('./src/utils')
 
 // resolve response.result, reject errors
 const getRpcPromiseCallback = (resolve, reject) => (error, response) => {
-  error || response.error
-    ? reject(error || response.error)
-    : Array.isArray(response)
+  if (error || response.error) {
+    reject(error || response.error)
+  } else {
+    Array.isArray(response)
       ? resolve(response)
       : resolve(response.result)
+  }
 }
 
 module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
 
-  constructor (connectionStream, shouldSendMetadata = true) {
+  constructor (connectionStream) {
 
     super()
 
@@ -68,7 +72,7 @@ module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
     this.sendAsync = this.sendAsync.bind(this)
 
     // setup connectionStream multiplexing
-    const mux = this.mux = new ObjectMultiplex()
+    const mux = new ObjectMultiplex()
     pump(
       connectionStream,
       mux,
@@ -79,21 +83,21 @@ module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
     // subscribe to metamask public config (one-way)
     this.publicConfigStore = new ObservableStore({ storageKey: 'MetaMask-Config' })
 
-    this.publicConfigStore.subscribe(state => {
+    this.publicConfigStore.subscribe((state) => {
       if ('isUnlocked' in state && state.isUnlocked !== this._state.isUnlocked) {
         this._state.isUnlocked = state.isUnlocked
-        if (!this._state.isUnlocked) {
-          // accounts are never exposed when the extension is locked
-          this._handleAccountsChanged([])
-        } else {
+        if (this._state.isUnlocked) {
           // this will get the exposed accounts, if any
           try {
             this._sendAsync(
               { method: 'eth_accounts', params: [] },
-              () => {},
+              NOOP,
               true, // indicating that eth_accounts _should_ update accounts
             )
-          } catch (_) {}
+          } catch (_) { /* no-op */ }
+        } else {
+          // accounts are never exposed when the extension is locked
+          this._handleAccountsChanged([])
         }
       }
 
@@ -124,12 +128,15 @@ module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
     // ignore phishing warning message (handled elsewhere)
     mux.ignoreStream('phishing')
 
+    // setup own event listeners
+
     // EIP-1193 connect
     this.on('connect', () => {
       this._state.isConnected = true
     })
 
     // connect to async provider
+
     const jsonRpcConnection = createJsonRpcStream()
     pump(
       jsonRpcConnection.stream,
@@ -138,7 +145,7 @@ module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
       this._handleDisconnect.bind(this, 'MetaMask RpcProvider'),
     )
 
-    // handle sendAsync requests via dapp-side rpc engine
+    // handle RPC requests via dapp-side rpc engine
     const rpcEngine = new RpcEngine()
     rpcEngine.push(createIdRemapMiddleware())
     rpcEngine.push(createErrorMiddleware())
@@ -146,12 +153,11 @@ module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
     this.rpcEngine = rpcEngine
 
     // json rpc notification listener
-    jsonRpcConnection.events.on('notification', payload => {
+    jsonRpcConnection.events.on('notification', (payload) => {
       if (payload.method === 'wallet_accountsChanged') {
         this._handleAccountsChanged(payload.result)
-      } else if (payload.method === 'eth_subscription') {
-        // EIP 1193 subscriptions, per eth-json-rpc-filters/subscriptionManager
-        this.emit('notification', payload.params.result)
+      } else if (EMITTED_NOTIFICATIONS.includes(payload.method)) {
+        this.emit('notification', payload)
       }
     })
 
@@ -191,15 +197,87 @@ module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
     return this._state.isConnected
   }
 
-  // Web3 1.0 provider uses `send` with a callback for async queries
-  send (payload, callback) {
-    const self = this
+  /**
+   * Sends an RPC request to MetaMask. Resolves to the result of the method call.
+   * May reject with an error that must be caught by the caller.
+   *
+   * @param {(string|Object)} methodOrPayload - The method name, or the RPC request object.
+   * @param {Array<any>} [params] - If given a method name, the method's parameters.
+   * @returns {Promise<any>} - A promise resolving to the result of the method call.
+   */
+  send (methodOrPayload, params) {
 
-    if (callback) {
-      self.sendAsync(payload, callback)
-    } else {
-      return self._sendSync(payload)
+    // preserve original params for later error if necessary
+    let _params = params
+
+    // construct payload object
+    let payload
+    if (
+      methodOrPayload &&
+      typeof methodOrPayload === 'object' &&
+      !Array.isArray(methodOrPayload)
+    ) {
+
+      // TODO:deprecate:2020-Q1
+      // handle send(object, callback), an alias for sendAsync(object, callback)
+      if (typeof _params === 'function') {
+        return this._sendAsync(methodOrPayload, _params)
+      }
+
+      payload = methodOrPayload
+
+      // TODO:deprecate:2020-Q1
+      // backwards compatibility: "synchronous" methods
+      if (!_params && [
+        'eth_accounts',
+        'eth_coinbase',
+        'eth_uninstallFilter',
+        'net_version',
+      ].includes(payload.method)) {
+        return this._sendSync(payload)
+      }
+    } else if (
+      typeof methodOrPayload === 'string' &&
+      typeof _params !== 'function'
+    ) {
+      // wrap params in array out of kindness
+      // params have to be an array per EIP 1193, even though JSON RPC
+      // allows objects
+      if (_params === undefined || _params === null) {
+        _params = []
+      } else if (!Array.isArray(_params)) {
+        _params = [_params]
+      }
+
+      payload = {
+        method: methodOrPayload,
+        params: _params,
+      }
     }
+
+    // typecheck payload and payload.params
+    if (
+      !payload ||
+      typeof payload !== 'object' ||
+      Array.isArray(payload) ||
+      !Array.isArray(_params)
+    ) {
+      throw ethErrors.rpc.invalidRequest({
+        message: messages.errors.invalidParams(),
+        data: [methodOrPayload, params],
+      })
+    }
+
+    return new Promise((resolve, reject) => {
+      try {
+        this._sendAsync(
+          payload,
+          getRpcPromiseCallback(resolve, reject),
+        )
+      } catch (error) {
+        reject(error)
+      }
+    })
   }
 
   /**
@@ -265,7 +343,7 @@ module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
         break
 
       case 'eth_uninstallFilter':
-        this._sendAsync(payload, () => {})
+        this._sendAsync(payload, NOOP)
         result = true
         break
 
@@ -308,6 +386,10 @@ module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
         payload.method === 'eth_requestAccounts'
       ) {
 
+        if (payload.method == 'eth_requestAccounts') {
+          payload.method = 'eth_accounts'
+        }
+
         // handle accounts changing
         cb = (err, res) => {
           this._handleAccountsChanged(
@@ -343,34 +425,36 @@ module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
    */
   _handleAccountsChanged (accounts, isEthAccounts = false, isInternal = false) {
 
+    let _accounts = accounts
+
     // defensive programming
     if (!Array.isArray(accounts)) {
       log.error(
         'MetaMask: Received non-array accounts parameter. Please report this bug.',
         accounts,
       )
-      accounts = []
+      _accounts = []
     }
 
     // emit accountsChanged if anything about the accounts array has changed
-    if (!dequal(this._state.accounts, accounts)) {
+    if (!dequal(this._state.accounts, _accounts)) {
 
       // we should always have the correct accounts even before eth_accounts
       // returns, except in cases where isInternal is true
       if (isEthAccounts && this._state.accounts !== undefined && !isInternal) {
         log.error(
           `MetaMask: 'eth_accounts' unexpectedly updated accounts. Please report this bug.`,
-          accounts,
+          _accounts,
         )
       }
 
-      this.emit('accountsChanged', accounts)
-      this._state.accounts = accounts
+      this.emit('accountsChanged', _accounts)
+      this._state.accounts = _accounts
     }
 
     // handle selectedAddress
-    if (this.selectedAddress !== accounts[0]) {
-      this.selectedAddress = accounts[0] || null
+    if (this.selectedAddress !== _accounts[0]) {
+      this.selectedAddress = _accounts[0] || null
     }
 
     // TODO:deprecate:2020-Q1
@@ -411,6 +495,7 @@ function getExperimentalApi (instance) {
       /**
        * Make a batch request.
        */
+      // eslint-disable-next-line require-await
       sendBatch: async (requests) => {
 
         // basic input validation

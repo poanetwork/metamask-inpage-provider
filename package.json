@@ -1,10 +1,12 @@
 {
   "name": "nifty-wallet-inpage-provider",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "An ethereum provider that connects over a WebExtension port.",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node test/*",
+    "lint": "eslint . --ext js,json",
+    "lint:fix": "./node_modules/bin/eslint . --ext js,json --fix"
   },
   "author": "",
   "license": "MIT",
@@ -25,12 +27,19 @@
   "dependencies": {
     "eth-json-rpc-errors": "^2.0.2",
     "fast-deep-equal": "^2.0.1",
-    "json-rpc-engine": "^3.7.4",
-    "json-rpc-middleware-stream": "^2.0.0",
+    "json-rpc-engine": "^5.1.5",
+    "json-rpc-middleware-stream": "^2.1.1",
     "loglevel": "^1.6.1",
     "obj-multiplex": "^1.0.0",
-    "obs-store": "^3.0.0",
+    "obs-store": "^4.0.3",
     "pump": "^3.0.0",
     "safe-event-emitter": "^1.0.1"
+  },
+  "devDependencies": {
+    "@metamask/eslint-config": "^2.1.0",
+    "eslint": "^6.8.0",
+    "eslint-plugin-import": "^2.20.2",
+    "eslint-plugin-json": "^2.0.1",
+    "tape": "^4.11.0"
   }
 }
