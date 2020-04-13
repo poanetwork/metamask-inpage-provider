@@ -386,7 +386,8 @@ module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
         payload.method === 'eth_requestAccounts'
       ) {
 
-        if (payload.method == 'eth_requestAccounts') {
+        // workaround: `eth_requestAccounts` is not supported yet. todo: EIP-1102
+        if (payload.method === 'eth_requestAccounts') {
           payload.method = 'eth_accounts'
         }
 
