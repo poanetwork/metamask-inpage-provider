@@ -393,6 +393,9 @@ module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
 
         // handle accounts changing
         cb = (err, res) => {
+          if (payload.method === 'eth_accounts' && !this._state.isUnlocked) {
+            res.result = []
+          }
           this._handleAccountsChanged(
             res.result || [],
             payload.method === 'eth_accounts',
@@ -442,15 +445,17 @@ module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
 
       // we should always have the correct accounts even before eth_accounts
       // returns, except in cases where isInternal is true
-      if (isEthAccounts && this._state.accounts !== undefined && !isInternal) {
+      if (this._state.isUnlocked && isEthAccounts && this._state.accounts !== undefined && !isInternal) {
         log.error(
           `MetaMask: 'eth_accounts' unexpectedly updated accounts. Please report this bug.`,
           _accounts,
         )
       }
 
-      this.emit('accountsChanged', _accounts)
-      this._state.accounts = _accounts
+      if (this._state.isUnlocked || (!this._state.isUnlocked && _accounts && _accounts.length === 0)) {
+        this.emit('accountsChanged', _accounts)
+        this._state.accounts = _accounts
+      }
     }
 
     // handle selectedAddress
