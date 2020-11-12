@@ -7,7 +7,7 @@ const asStream = require('obs-store/lib/asStream')
 const ObjectMultiplex = require('obj-multiplex')
 const SafeEventEmitter = require('safe-event-emitter')
 const dequal = require('fast-deep-equal')
-const { ethErrors } = require('eth-json-rpc-errors')
+const { ethErrors } = require('eth-rpc-errors')
 const log = require('loglevel')
 
 const messages = require('./src/messages')
@@ -55,7 +55,7 @@ module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
       isUnlocked: undefined,
     }
 
-    this._metamask = getExperimentalApi(this)
+    this._metamask = this._getExperimentalApi()
 
     // public state
     this.selectedAddress = null
@@ -65,9 +65,10 @@ module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
     // bind functions (to prevent e.g. web3@1.x from making unbound calls)
     this._handleAccountsChanged = this._handleAccountsChanged.bind(this)
     this._handleDisconnect = this._handleDisconnect.bind(this)
-    this._sendAsync = this._sendAsync.bind(this)
     this._sendSync = this._sendSync.bind(this)
+    this._rpcRequest = this._rpcRequest.bind(this)
     this.enable = this.enable.bind(this)
+    this.request = this.request.bind(this)
     this.send = this.send.bind(this)
     this.sendAsync = this.sendAsync.bind(this)
 
@@ -89,7 +90,7 @@ module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
         if (this._state.isUnlocked) {
           // this will get the exposed accounts, if any
           try {
-            this._sendAsync(
+            this._rpcRequest(
               { method: 'eth_accounts', params: [] },
               NOOP,
               true, // indicating that eth_accounts _should_ update accounts
@@ -198,85 +199,48 @@ module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
   }
 
   /**
-   * Sends an RPC request to MetaMask. Resolves to the result of the method call.
-   * May reject with an error that must be caught by the caller.
+   * Submits an RPC request for the given method, with the given params.
+   * Resolves with the result of the method call, or rejects on error.
    *
-   * @param {(string|Object)} methodOrPayload - The method name, or the RPC request object.
-   * @param {Array<any>} [params] - If given a method name, the method's parameters.
-   * @returns {Promise<any>} - A promise resolving to the result of the method call.
+   * @param {Object} args - The RPC request arguments.
+   * @param {string} args.method - The RPC method name.
+   * @param {unknown[] | Object} [args.params] - The parameters for the RPC method.
+   * @returns {Promise<unknown>} A Promise that resolves with the result of the RPC method,
+   * or rejects if an error is encountered.
    */
-  send (methodOrPayload, params) {
+  async request (args) {
 
-    // preserve original params for later error if necessary
-    let _params = params
-
-    // construct payload object
-    let payload
-    if (
-      methodOrPayload &&
-      typeof methodOrPayload === 'object' &&
-      !Array.isArray(methodOrPayload)
-    ) {
-
-      // TODO:deprecate:2020-Q1
-      // handle send(object, callback), an alias for sendAsync(object, callback)
-      if (typeof _params === 'function') {
-        return this._sendAsync(methodOrPayload, _params)
-      }
-
-      payload = methodOrPayload
-
-      // TODO:deprecate:2020-Q1
-      // backwards compatibility: "synchronous" methods
-      if (!_params && [
-        'eth_accounts',
-        'eth_coinbase',
-        'eth_uninstallFilter',
-        'net_version',
-      ].includes(payload.method)) {
-        return this._sendSync(payload)
-      }
-    } else if (
-      typeof methodOrPayload === 'string' &&
-      typeof _params !== 'function'
-    ) {
-      // wrap params in array out of kindness
-      // params have to be an array per EIP 1193, even though JSON RPC
-      // allows objects
-      if (_params === undefined || _params === null) {
-        _params = []
-      } else if (!Array.isArray(_params)) {
-        _params = [_params]
-      }
-
-      payload = {
-        method: methodOrPayload,
-        params: _params,
-      }
+    if (!args || typeof args !== 'object' || Array.isArray(args)) {
+      throw ethErrors.rpc.invalidRequest({
+        message: messages.errors.invalidRequestArgs(),
+        data: args,
+      })
     }
 
-    // typecheck payload and payload.params
+    const { method, params } = args
+
+    if (typeof method !== 'string' || method.length === 0) {
+      throw ethErrors.rpc.invalidRequest({
+        message: messages.errors.invalidRequestMethod(),
+        data: args,
+      })
+    }
+
     if (
-      !payload ||
-      typeof payload !== 'object' ||
-      Array.isArray(payload) ||
-      !Array.isArray(_params)
+      params !== undefined && !Array.isArray(params) &&
+      (typeof params !== 'object' || params === null)
     ) {
       throw ethErrors.rpc.invalidRequest({
-        message: messages.errors.invalidParams(),
-        data: [methodOrPayload, params],
+        message: messages.errors.invalidRequestParams(),
+        data: args,
       })
     }
 
     return new Promise((resolve, reject) => {
-      try {
-        this._sendAsync(
-          payload,
-          getRpcPromiseCallback(resolve, reject),
-        )
-      } catch (error) {
-        reject(error)
-      }
+      this._rpcRequest(
+        { method, params },
+        getRpcPromiseCallback(resolve, reject),
+      )
     })
   }
 
@@ -294,7 +258,7 @@ module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
     }
     return new Promise((resolve, reject) => {
       try {
-        this._sendAsync(
+        this._rpcRequest(
           { method: 'eth_requestAccounts', params: [] },
           getRpcPromiseCallback(resolve, reject),
         )
@@ -305,75 +269,30 @@ module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
   }
 
   /**
-   * Deprecated.
-   * Backwards compatibility. ethereum.send() with callback.
+   * Submits an RPC request per the given JSON-RPC request object.
    *
    * @param {Object} payload - The RPC request object.
-   * @param {Function} callback - The callback function.
+   * @param {Function} cb - The callback function.
    */
   sendAsync (payload, cb) {
-
-    if (!this._state.sentWarnings.sendAsync) {
-      log.warn(messages.warnings.sendAsyncDeprecation)
-      this._state.sentWarnings.sendAsync = true
-    }
-    this._sendAsync(payload, cb)
+    this._rpcRequest(payload, cb)
   }
 
-  /**
-   * TODO:deprecate:2020-Q1
-   * Internal backwards compatibility method.
-   */
-  _sendSync (payload) {
-
-    if (!this._state.sentWarnings.sendSync) {
-      log.warn(messages.warnings.sendSyncDeprecation)
-      this._state.sentWarnings.sendSync = true
-    }
-
-    let result
-    switch (payload.method) {
-
-      case 'eth_accounts':
-        result = this.selectedAddress ? [this.selectedAddress] : []
-        break
-
-      case 'eth_coinbase':
-        result = this.selectedAddress || null
-        break
-
-      case 'eth_uninstallFilter':
-        this._sendAsync(payload, NOOP)
-        result = true
-        break
-
-      case 'net_version':
-        result = this.networkVersion || null
-        break
-
-      default:
-        throw new Error(messages.errors.unsupportedSync(payload.method))
-    }
-
-    // looks like a plain object, but behaves like a Promise if someone calls .then on it :evil_laugh:
-    return makeThenable({
-      id: payload.id,
-      jsonrpc: payload.jsonrpc,
-      result,
-    }, 'result')
-  }
+  //====================
+  // Private Methods
+  //====================
 
   /**
    * Internal RPC method. Forwards requests to background via the RPC engine.
    * Also remap ids inbound and outbound.
    *
    * @param {Object} payload - The RPC request object.
-   * @param {Function} userCallback - The caller's callback.
-   * @param {boolean} isInternal - Whether the request is internal.
+   * @param {Function} callback - The consumer's callback.
+   * @param {boolean} [isInternal=false] - Whether the request is internal.
    */
-  _sendAsync (payload, userCallback, isInternal = false) {
+  _rpcRequest (payload, callback, isInternal = false) {
 
-    let cb = userCallback
+    let cb = callback
 
     if (!Array.isArray(payload)) {
 
@@ -401,11 +320,10 @@ module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
             payload.method === 'eth_accounts',
             isInternal,
           )
-          userCallback(err, res)
+          callback(err, res)
         }
       }
     }
-
     this.rpcEngine.handle(payload, cb)
   }
 
@@ -475,90 +393,167 @@ module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
       window.web3.eth.defaultAccount = this.selectedAddress
     }
   }
-}
 
-/**
- * Gets experimental _metamask API as Proxy.
- */
-function getExperimentalApi (instance) {
-  return new Proxy(
-    {
+  /**
+   * Constructor helper.
+   * Gets experimental _metamask API as Proxy, so that we can warn consumers
+   * about its experiment nature.
+   */
+  _getExperimentalApi () {
 
-      /**
-       * Determines if MetaMask is unlocked by the user.
-       *
-       * @returns {Promise<boolean>} - Promise resolving to true if MetaMask is currently unlocked
-       */
-      isUnlocked: async () => {
-        if (instance._state.isUnlocked === undefined) {
-          await new Promise(
-            (resolve) => instance.publicConfigStore.once('update', () => resolve()),
-          )
-        }
-        return instance._state.isUnlocked
-      },
+    return new Proxy(
+      {
 
-      /**
-       * Make a batch request.
-       */
-      // eslint-disable-next-line require-await
-      sendBatch: async (requests) => {
+        /**
+         * Determines if MetaMask is unlocked by the user.
+         *
+         * @returns {Promise<boolean>} - Promise resolving to true if MetaMask is currently unlocked
+         */
+        isUnlocked: async () => {
+          if (this._state.isUnlocked === undefined) {
+            await new Promise(
+              (resolve) => this._publicConfigStore.once('update', () => resolve()),
+            )
+          }
+          return this._state.isUnlocked
+        },
 
-        // basic input validation
-        if (!Array.isArray(requests)) {
-          throw ethErrors.rpc.invalidRequest({
-            message: 'Batch requests must be made with an array of request objects.',
-            data: requests,
-          })
-        }
+        /**
+         * Make a batch RPC request.
+         */
+        requestBatch: async (requests) => {
 
-        return new Promise((resolve, reject) => {
-          try {
-            instance._sendAsync(
+          if (!Array.isArray(requests)) {
+            throw ethErrors.rpc.invalidRequest({
+              message: 'Batch requests must be made with an array of request objects.',
+              data: requests,
+            })
+          }
+
+          return new Promise((resolve, reject) => {
+            this._rpcRequest(
               requests,
               getRpcPromiseCallback(resolve, reject),
             )
-          } catch (error) {
-            reject(error)
+          })
+        },
+
+        // TODO:deprecation:remove isEnabled, isApproved
+        /**
+         * Synchronously determines if this domain is currently enabled, with a potential false negative if called to soon
+         *
+         * @deprecated
+         * @returns {boolean} - returns true if this domain is currently enabled
+         */
+        isEnabled: () => {
+          return Array.isArray(this._state.accounts) && this._state.accounts.length > 0
+        },
+
+        /**
+         * Asynchronously determines if this domain is currently enabled
+         *
+         * @deprecated
+         * @returns {Promise<boolean>} - Promise resolving to true if this domain is currently enabled
+         */
+        isApproved: async () => {
+          if (this._state.accounts === undefined) {
+            await new Promise(
+              (resolve) => this.once('accountsChanged', () => resolve()),
+            )
           }
-        })
+          return Array.isArray(this._state.accounts) && this._state.accounts.length > 0
+        },
       },
+      {
+        get: (obj, prop) => {
 
-      // TODO:deprecate:2020-Q1 isEnabled, isApproved
-      /**
-       * Deprecated. Will be removed in Q1 2020.
-       * Synchronously determines if this domain is currently enabled, with a potential false negative if called to soon
-       *
-       * @returns {boolean} - returns true if this domain is currently enabled
-       */
-      isEnabled: () => {
-        return Array.isArray(instance._state.accounts) && instance._state.accounts.length > 0
+          if (!this._state.sentWarnings.experimentalMethods) {
+            log.warn(messages.warnings.experimentalMethods)
+            this._state.sentWarnings.experimentalMethods = true
+          }
+          return obj[prop]
+        },
       },
+    )
+  }
 
-      /**
-       * Deprecated. Will be removed in Q1 2020.
-       * Asynchronously determines if this domain is currently enabled
-       *
-       * @returns {Promise<boolean>} - Promise resolving to true if this domain is currently enabled
-       */
-      isApproved: async () => {
-        if (instance._state.accounts === undefined) {
-          await new Promise(
-            (resolve) => instance.once('accountsChanged', () => resolve()),
+  //====================
+  // Deprecated Methods
+  //====================
+
+  /**
+   * Sends an RPC request to MetaMask.
+   * Many different return types, which is why this method should not be used.
+   *
+   * @deprecated
+   * @param {(string | Object)} methodOrPayload - The method name, or the RPC request object.
+   * @param {Array<any> | Function} [callbackOrArgs] - If given a method name, the method's parameters.
+   * @returns {unknown} - The method result, or a JSON RPC response object.
+   */
+  send (methodOrPayload, callbackOrArgs) {
+
+    if (!this._state.sentWarnings.send) {
+      log.warn(messages.warnings.sendDeprecation)
+      this._state.sentWarnings.send = true
+    }
+
+    if (
+      typeof methodOrPayload === 'string' &&
+      (!callbackOrArgs || Array.isArray(callbackOrArgs))
+    ) {
+      return new Promise((resolve, reject) => {
+        try {
+          this._rpcRequest(
+            { method: methodOrPayload, params: callbackOrArgs },
+            getRpcPromiseCallback(resolve, reject, false),
           )
+        } catch (error) {
+          reject(error)
         }
-        return Array.isArray(instance._state.accounts) && instance._state.accounts.length > 0
-      },
-    },
-    {
-      get: (obj, prop) => {
+      })
+    } else if (
+      typeof methodOrPayload === 'object' &&
+      typeof callbackOrArgs === 'function'
+    ) {
+      return this._rpcRequest(methodOrPayload, callbackOrArgs)
+    }
+    return this._sendSync(methodOrPayload)
+  }
+  /**
+   * Internal backwards compatibility method, used in send.
+   *
+   * @deprecated
+   */
+  _sendSync (payload) {
 
-        if (!instance._state.sentWarnings.experimentalMethods) {
-          log.warn(messages.warnings.experimentalMethods)
-          instance._state.sentWarnings.experimentalMethods = true
-        }
-        return obj[prop]
-      },
-    },
-  )
+    let result
+    switch (payload.method) {
+
+      case 'eth_accounts':
+        result = this.selectedAddress ? [this.selectedAddress] : []
+        break
+
+      case 'eth_coinbase':
+        result = this.selectedAddress || null
+        break
+
+      case 'eth_uninstallFilter':
+        this._rpcRequest(payload, NOOP)
+        result = true
+        break
+
+      case 'net_version':
+        result = this.networkVersion || null
+        break
+
+      default:
+        throw new Error(messages.errors.unsupportedSync(payload.method))
+    }
+
+    return {
+      id: payload.id,
+      jsonrpc: payload.jsonrpc,
+      result,
+    }
+  }
 }
