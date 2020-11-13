@@ -15,20 +15,9 @@ const {
   createErrorMiddleware,
   EMITTED_NOTIFICATIONS,
   logStreamDisconnectWarning,
-  makeThenable,
+  getRpcPromiseCallback,
   NOOP,
 } = require('./src/utils')
-
-// resolve response.result, reject errors
-const getRpcPromiseCallback = (resolve, reject) => (error, response) => {
-  if (error || response.error) {
-    reject(error || response.error)
-  } else {
-    Array.isArray(response)
-      ? resolve(response)
-      : resolve(response.result)
-  }
-}
 
 module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
 
@@ -244,29 +233,6 @@ module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
     })
   }
 
-  /**
-   * Deprecated.
-   * Equivalent to: ethereum.send('eth_requestAccounts')
-   *
-   * @returns {Promise<Array<string>>} - A promise that resolves to an array of addresses.
-   */
-  enable () {
-
-    if (!this._state.sentWarnings.enable) {
-      log.warn(messages.warnings.enableDeprecation)
-      this._state.sentWarnings.enable = true
-    }
-    return new Promise((resolve, reject) => {
-      try {
-        this._rpcRequest(
-          { method: 'eth_requestAccounts', params: [] },
-          getRpcPromiseCallback(resolve, reject),
-        )
-      } catch (error) {
-        reject(error)
-      }
-    })
-  }
 
   /**
    * Submits an RPC request per the given JSON-RPC request object.
@@ -312,9 +278,6 @@ module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
 
         // handle accounts changing
         cb = (err, res) => {
-          if (payload.method === 'eth_accounts' && !this._state.isUnlocked) {
-            res.result = []
-          }
           this._handleAccountsChanged(
             res.result || [],
             payload.method === 'eth_accounts',
@@ -412,7 +375,7 @@ module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
         isUnlocked: async () => {
           if (this._state.isUnlocked === undefined) {
             await new Promise(
-              (resolve) => this._publicConfigStore.once('update', () => resolve()),
+              (resolve) => this.publicConfigStore.once('update', () => resolve()),
             )
           }
           return this._state.isUnlocked
@@ -480,6 +443,30 @@ module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
   //====================
   // Deprecated Methods
   //====================
+
+  /**
+   * Equivalent to: ethereum.request('eth_requestAccounts')
+   *
+   * @deprecated
+   * @returns {Promise<Array<string>>} - A promise that resolves to an array of addresses.
+   */
+  enable () {
+
+    if (!this._state.sentWarnings.enable) {
+      log.warn(messages.warnings.enableDeprecation)
+      this._state.sentWarnings.enable = true
+    }
+    return new Promise((resolve, reject) => {
+      try {
+        this._rpcRequest(
+          { method: 'eth_requestAccounts', params: [] },
+          getRpcPromiseCallback(resolve, reject),
+        )
+      } catch (error) {
+        reject(error)
+      }
+    })
+  }
 
   /**
    * Sends an RPC request to MetaMask.
