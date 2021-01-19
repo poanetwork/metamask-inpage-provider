@@ -1,15 +1,15 @@
-const MetamaskInpageProvider = require('./MetamaskInpageProvider')
+const MetaMaskInpageProvider = require('./MetaMaskInpageProvider')
 
 /**
-   * Initializes a MetamaskInpageProvider and (optionally) sets it on window.ethereum.
-   *
-   * @param {Object} opts - An options bag.
-   * @param {Object} opts.connectionStream - A Node.js stream.
-   * @param {number} opts.maxEventListeners - The maximum number of event listeners.
-   * @param {boolean} opts.shouldSendMetadata - Whether the provider should send page metadata.
-   * @param {boolean} opts.shouldSetOnWindow - Whether the provider should be set as window.ethereum
-   * @returns {MetamaskInpageProvider | Proxy} The initialized provider (whether set or not).
-   */
+ * Initializes a MetaMaskInpageProvider and (optionally) assigns it as window.ethereum.
+ *
+ * @param {Object} options - An options bag.
+ * @param {Object} options.connectionStream - A Node.js stream.
+ * @param {number} options.maxEventListeners - The maximum number of event listeners.
+ * @param {boolean} options.shouldSendMetadata - Whether the provider should send page metadata.
+ * @param {boolean} options.shouldSetOnWindow - Whether the provider should be set as window.ethereum
+ * @returns {MetaMaskInpageProvider | Proxy} The initialized provider (whether set or not).
+ */
 function initProvider ({
   connectionStream,
   maxEventListeners = 100,
@@ -17,11 +17,7 @@ function initProvider ({
   shouldSetOnWindow = true,
 } = {}) {
 
-  if (!connectionStream) {
-    throw new Error('Must provide a connection stream.')
-  }
-
-  let provider = new MetamaskInpageProvider(
+  let provider = new MetaMaskInpageProvider(
     connectionStream, { shouldSendMetadata, maxEventListeners },
   )
 
@@ -40,7 +36,7 @@ function initProvider ({
  * Sets the given provider instance as window.ethereum and dispatches the
  * 'ethereum#initialized' event on window.
  *
- * @param {MetamaskInpageProvider} providerInstance - The provider instance.
+ * @param {MetaMaskInpageProvider} providerInstance - The provider instance.
  */
 function setGlobalProvider (providerInstance) {
   window.ethereum = providerInstance

@@ -8,7 +8,7 @@ const ObjectMultiplex = require('obj-multiplex')
 const SafeEventEmitter = require('safe-event-emitter')
 const dequal = require('fast-deep-equal')
 const { ethErrors } = require('eth-rpc-errors')
-const log = require('loglevel')
+const { duplex: isDuplex } = require('is-stream')
 
 const messages = require('./messages')
 const {
@@ -19,12 +19,41 @@ const {
   NOOP,
 } = require('./utils')
 
-module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
+let log
+
+/**
+ * @typedef {Object} ConsoleLike
+ * @property {function} debug - Like console.debug
+ * @property {function} error - Like console.error
+ * @property {function} info - Like console.info
+ * @property {function} log - Like console.log
+ * @property {function} trace - Like console.trace
+ * @property {function} warn - Like console.warn
+ */
+
+
+module.exports = class MetaMaskInpageProvider extends SafeEventEmitter {
 
   constructor (
       connectionStream,
       { maxEventListeners = 100 } = {},
   ) {
+
+    validateLoggerObject(logger)
+    log = logger
+
+    if (!isDuplex(connectionStream)) {
+        throw new Error(messages.errors.invalidDuplexStream())
+    }
+  
+    if (
+        typeof maxEventListeners !== 'number' ||
+        typeof shouldSendMetadata !== 'boolean'
+    ) {
+        throw new Error(messages.errors.invalidOptions(
+          maxEventListeners, shouldSendMetadata,
+        ))
+    }
 
     super()
 
@@ -446,9 +475,9 @@ module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
   //====================
 
   /**
-   * DEPRECATED.
    * Equivalent to: ethereum.request('eth_requestAccounts')
    *
+   * @deprecated
    * @returns {Promise<Array<string>>} - A promise that resolves to an array of addresses.
    */
   enable () {
@@ -471,10 +500,10 @@ module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
   }
 
   /**
-   * DEPRECATED.
    * Sends an RPC request to MetaMask.
    * Many different return types, which is why this method should not be used.
    *
+   * @deprecated
    * @param {(string | Object)} methodOrPayload - The method name, or the RPC request object.
    * @param {Array<any> | Function} [callbackOrArgs] - If given a method name, the method's parameters.
    * @returns {unknown} - The method result, or a JSON RPC response object.
@@ -510,8 +539,9 @@ module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
   }
 
   /**
-   * DEPRECATED.
    * Internal backwards compatibility method, used in send.
+   *
+   * @deprecated
    */
   _sendSync (payload) {
 
@@ -546,3 +576,18 @@ module.exports = class MetamaskInpageProvider extends SafeEventEmitter {
     }
   }
 }
+
+function validateLoggerObject (logger) {
+    if (logger !== console) {
+      if (typeof logger === 'object') {
+        const methodKeys = ['log', 'warn', 'error', 'debug', 'info', 'trace']
+        for (const key of methodKeys) {
+          if (typeof logger[key] !== 'function') {
+            throw new Error(messages.errors.invalidLoggerMethod(key))
+          }
+        }
+        return
+      }
+      throw new Error(messages.errors.invalidLoggerObject())
+    }
+  }

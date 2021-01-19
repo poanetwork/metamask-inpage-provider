@@ -1,8 +1,15 @@
 module.exports = {
   errors: {
-    invalidParams: () => `MetaMask: Invalid request parameters. Please use ethereum.send(method: string, params: Array<any>). For more details, see: https://eips.ethereum.org/EIPS/eip-1193`,
+    disconnected: () => `MetaMask: Lost connection to MetaMask background process.`,
     sendSiteMetadata: () => `MetaMask: Failed to send site metadata. This is an internal error, please report this bug.`,
-    unsupportedSync: (method) => `MetaMask: The MetaMask Web3 object does not support synchronous methods like ${method} without a callback parameter.`, // TODO:deprecate:2020-Q1
+    unsupportedSync: (method) => `MetaMask: The MetaMask Web3 object does not support synchronous methods like ${method} without a callback parameter.`,
+    invalidDuplexStream: () => 'Must provide a Node.js-style duplex stream.',
+    invalidOptions: (maxEventListeners, shouldSendMetadata) => `Invalid options. Received: { maxEventListeners: ${maxEventListeners}, shouldSendMetadata: ${shouldSendMetadata} }`,
+    invalidRequestArgs: () => `Expected a single, non-array, object argument.`,
+    invalidRequestMethod: () => `'args.method' must be a non-empty string.`,
+    invalidRequestParams: () => `'args.params' must be an object or array if provided.`,
+    invalidLoggerObject: () => `'args.logger' must be an object if provided.`,
+    invalidLoggerMethod: (method) => `'args.logger' must include required method '${method}'.`,
   },
   warnings: {
     // TODO:deprecate:2020-Q1

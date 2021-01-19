@@ -1,21 +1,20 @@
 const EventEmitter = require('events')
-const log = require('loglevel')
-const { ethErrors, serializeError } = require('eth-rpc-errors')
+const { ethErrors } = require('eth-rpc-errors')
 const SafeEventEmitter = require('safe-event-emitter')
 
 // utility functions
 
 /**
- * json-rpc-engine middleware that both logs standard and non-standard error
- * messages and ends middleware stack traversal if an error is encountered
+ * json-rpc-engine middleware that logs RPC errors and and validates req.method.
  *
+ * @param {Object} log - The logging API to use.
  * @returns {Function} json-rpc-engine middleware function
  */
-function createErrorMiddleware () {
+function createErrorMiddleware (log) {
   return (req, res, next) => {
 
     // json-rpc-engine will terminate the request when it notices this error
-    if (!req.method || typeof req.method !== 'string') {
+    if (typeof req.method !== 'string' || !req.method) {
       res.error = ethErrors.rpc.invalidRequest({
         message: `The request 'method' must be a non-empty string.`,
         data: req,
@@ -27,7 +26,6 @@ function createErrorMiddleware () {
       if (!error) {
         return done()
       }
-      serializeError(error)
       log.error(`MetaMask - RPC Error: ${error.message}`, error)
       return done()
     })
@@ -49,11 +47,12 @@ const getRpcPromiseCallback = (resolve, reject, unwrapResult = true) => (error, 
  * Logs a stream disconnection error. Emits an 'error' if bound to an
  * EventEmitter that has listeners for the 'error' event.
  *
+ * @param {Object} log - The logging API to use.
  * @param {string} remoteLabel - The label of the disconnected stream.
  * @param {Error} err - The associated error to log.
  */
-function logStreamDisconnectWarning (remoteLabel, err) {
-  let warningMsg = `MetamaskInpageProvider - lost connection to ${remoteLabel}`
+function logStreamDisconnectWarning (log, remoteLabel, err) {
+  let warningMsg = `MetaMaskInpageProvider - lost connection to ${remoteLabel}`
   if (err) {
     warningMsg += `\n${err.stack}`
   }
