@@ -3,11 +3,7 @@ const log = require('loglevel')
 const { ethErrors, serializeError } = require('eth-rpc-errors')
 const SafeEventEmitter = require('safe-event-emitter')
 
-/**
- * Middleware configuration object
- *
- * @typedef {Object} MiddlewareConfig
- */
+// utility functions
 
 /**
  * json-rpc-engine middleware that both logs standard and non-standard error
@@ -38,12 +34,12 @@ function createErrorMiddleware () {
   }
 }
 
-// resolve response.result, reject errors
-const getRpcPromiseCallback = (resolve, reject) => (error, response) => {
+// resolve response.result or response, reject errors
+const getRpcPromiseCallback = (resolve, reject, unwrapResult = true) => (error, response) => {
   if (error || response.error) {
     reject(error || response.error)
   } else {
-    Array.isArray(response)
+    !unwrapResult || Array.isArray(response)
       ? resolve(response)
       : resolve(response.result)
   }
@@ -69,17 +65,19 @@ function logStreamDisconnectWarning (remoteLabel, err) {
   }
 }
 
+// eslint-disable-next-line no-empty-function
+const NOOP = () => {}
+
+// constants
+
 const EMITTED_NOTIFICATIONS = [
   'eth_subscription', // per eth-json-rpc-filters/subscriptionManager
 ]
 
-// eslint-disable-next-line no-empty-function
-const NOOP = () => {}
-
 module.exports = {
   createErrorMiddleware,
   EMITTED_NOTIFICATIONS,
-  logStreamDisconnectWarning,
   getRpcPromiseCallback,
+  logStreamDisconnectWarning,
   NOOP,
 }
