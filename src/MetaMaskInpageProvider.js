@@ -1,13 +1,12 @@
 const pump = require('pump')
-const RpcEngine = require('json-rpc-engine')
-const createIdRemapMiddleware = require('json-rpc-engine/src/idRemapMiddleware')
+const { JsonRpcEngine, createIdRemapMiddleware } = require('json-rpc-engine')
 const createJsonRpcStream = require('json-rpc-middleware-stream')
 const ObservableStore = require('obs-store')
 const asStream = require('obs-store/lib/asStream')
 const ObjectMultiplex = require('obj-multiplex')
-const SafeEventEmitter = require('safe-event-emitter')
+const { default: SafeEventEmitter } = require('@metamask/safe-event-emitter')
 const dequal = require('fast-deep-equal')
-const { ethErrors } = require('eth-rpc-errors')
+const { ethErrors, EthereumRpcError } = require('eth-rpc-errors')
 const { duplex: isDuplex } = require('is-stream')
 
 const messages = require('./messages')
@@ -18,8 +17,6 @@ const {
   getRpcPromiseCallback,
   NOOP,
 } = require('./utils')
-
-let log
 
 /**
  * @typedef {Object} ConsoleLike
@@ -34,13 +31,27 @@ let log
 
 module.exports = class MetaMaskInpageProvider extends SafeEventEmitter {
 
+  /**
+   * @param {Object} connectionStream - A Node.js duplex stream
+   * @param {Object} options - An options bag
+   * @param {string} [options.jsonRpcStreamName] - The name of the internal JSON-RPC stream.
+   * Default: metamask_provider
+   * @param {ConsoleLike} [options.logger] - The logging API to use. Default: console
+   * @param {number} [options.maxEventListeners] - The maximum number of event
+   * listeners. Default: 100
+   * @param {boolean} [options.shouldSendMetadata] - Whether the provider should
+   * send page metadata. Default: true
+   */
   constructor (
       connectionStream,
-      { maxEventListeners = 100 } = {},
+      {
+        jsonRpcStreamName = 'metamask-provider',
+        logger = console,
+        maxEventListeners = 100,
+        shouldSendMetadata = true,
+      } = {},
   ) {
 
-    validateLoggerObject(logger)
-    log = logger
 
     if (!isDuplex(connectionStream)) {
         throw new Error(messages.errors.invalidDuplexStream())
@@ -55,8 +66,11 @@ module.exports = class MetaMaskInpageProvider extends SafeEventEmitter {
         ))
     }
 
+    validateLoggerObject(logger)
+
     super()
 
+    this._log = logger
     this.isMetaMask = true
     this.isNiftyWallet = true
 
@@ -166,11 +180,11 @@ module.exports = class MetaMaskInpageProvider extends SafeEventEmitter {
     )
 
     // handle RPC requests via dapp-side rpc engine
-    const rpcEngine = new RpcEngine()
+    const rpcEngine = new JsonRpcEngine()
     rpcEngine.push(createIdRemapMiddleware())
-    rpcEngine.push(createErrorMiddleware())
+    rpcEngine.push(createErrorMiddleware(this._log))
     rpcEngine.push(jsonRpcConnection.middleware)
-    this.rpcEngine = rpcEngine
+    this._rpcEngine = rpcEngine
 
     // json rpc notification listener
     jsonRpcConnection.events.on('notification', (payload) => {
@@ -198,7 +212,7 @@ module.exports = class MetaMaskInpageProvider extends SafeEventEmitter {
     // the use thereof per EIP 1102
     setTimeout(() => {
       if (this.autoRefreshOnNetworkChange && !this._state.sentWarnings.autoReload) {
-        log.warn(messages.warnings.autoReloadDeprecation)
+        this._log.warn(messages.warnings.autoReloadDeprecation)
         this._state.sentWarnings.autoReload = true
       }
     }, 1000)
@@ -211,7 +225,7 @@ module.exports = class MetaMaskInpageProvider extends SafeEventEmitter {
   isConnected () {
 
     if (!this._state.sentWarnings.isConnected) {
-      log.warn(messages.warnings.isConnectedDeprecation)
+      this._log.warn(messages.warnings.isConnectedDeprecation)
       this._state.sentWarnings.isConnected = true
     }
     return this._state.isConnected
@@ -228,7 +242,6 @@ module.exports = class MetaMaskInpageProvider extends SafeEventEmitter {
    * or rejects if an error is encountered.
    */
   async request (args) {
-
     if (!args || typeof args !== 'object' || Array.isArray(args)) {
       throw ethErrors.rpc.invalidRequest({
         message: messages.errors.invalidRequestArgs(),
@@ -279,15 +292,49 @@ module.exports = class MetaMaskInpageProvider extends SafeEventEmitter {
   //====================
 
   /**
+   * Constructor helper.
+   * Populates initial state by calling 'metamask_getProviderState' and emits
+   * necessary events.
+   *
+   * @private
+   */
+  async _initializeState () {
+    try {
+      const {
+        accounts,
+        chainId,
+        isUnlocked,
+        networkVersion,
+      } = await this.request({
+        method: 'metamask_getProviderState',
+      })
+
+      // indicate that we've connected, for EIP-1193 compliance
+      this.emit('connect', { chainId })
+
+      this._handleChainChanged({ chainId, networkVersion })
+      this._handleUnlockStateChanged({ accounts, isUnlocked })
+      this._handleAccountsChanged(accounts)
+    } catch (error) {
+      this._log.error(
+        'MetaMask: Failed to get initial state. Please report this bug.',
+        error,
+      )
+    } finally {
+      this._state.initialized = true
+      this.emit('_initialized')
+    }
+  }
+
+  /**
    * Internal RPC method. Forwards requests to background via the RPC engine.
    * Also remap ids inbound and outbound.
    *
+   * @private
    * @param {Object} payload - The RPC request object.
    * @param {Function} callback - The consumer's callback.
-   * @param {boolean} [isInternal=false] - Whether the request is internal.
    */
-  _rpcRequest (payload, callback, isInternal = false) {
-
+  _rpcRequest (payload, callback) {
     let cb = callback
 
     if (!Array.isArray(payload)) {
@@ -311,28 +358,127 @@ module.exports = class MetaMaskInpageProvider extends SafeEventEmitter {
           this._handleAccountsChanged(
             res.result || [],
             payload.method === 'eth_accounts',
-            isInternal,
           )
           callback(err, res)
         }
       }
     }
-    this.rpcEngine.handle(payload, cb)
+    this._rpcEngine.handle(payload, cb)
+  }
+
+  /**
+   * When the provider becomes connected, updates internal state and emits
+   * required events. Idempotent.
+   *
+   * @param {string} chainId - The ID of the newly connected chain.
+   * @emits MetaMaskInpageProvider#connect
+   */
+  _handleConnect (chainId) {
+    if (!this._state.isConnected) {
+      this._state.isConnected = true
+      this.emit('connect', { chainId })
+      this._log.debug(messages.info.connected(chainId))
+    }
+  }
+
+  /**
+   * When the provider becomes disconnected, updates internal state and emits
+   * required events. Idempotent with respect to the isRecoverable parameter.
+   *
+   * Error codes per the CloseEvent status codes as required by EIP-1193:
+   * https://developer.mozilla.org/en-US/docs/Web/API/CloseEvent#Status_codes
+   *
+   * @param {boolean} isRecoverable - Whether the disconnection is recoverable.
+   * @param {string} [errorMessage] - A custom error message.
+   * @emits MetaMaskInpageProvider#disconnect
+   */
+  _handleDisconnect (isRecoverable, errorMessage) {
+    if (
+      this._state.isConnected ||
+      (!this._state.isPermanentlyDisconnected && !isRecoverable)
+    ) {
+      this._state.isConnected = false
+
+      let error
+      if (isRecoverable) {
+        error = new EthereumRpcError(
+          1013, // Try again later
+          errorMessage || messages.errors.disconnected(),
+        )
+        this._log.debug(error)
+      } else {
+        error = new EthereumRpcError(
+          1011, // Internal error
+          errorMessage || messages.errors.permanentlyDisconnected(),
+        )
+        this._log.error(error)
+        this.chainId = null
+        this.networkVersion = null
+        this._state.accounts = null
+        this.selectedAddress = null
+        this._state.isUnlocked = null
+        this._state.isPermanentlyDisconnected = true
+      }
+
+      this.emit('disconnect', error)
+      this.emit('close', error) // deprecated
+    }
   }
 
   /**
    * Called when connection is lost to critical streams.
+   *
+   * @private
+   * @emits MetamaskInpageProvider#disconnect
    */
-  _handleDisconnect (streamName, err) {
+  _handleStreamDisconnect (streamName, error) {
+    logStreamDisconnectWarning(this._log, streamName, error, this)
+    this._handleDisconnect(false, error ? error.message : undefined)
+  }
 
-    logStreamDisconnectWarning.bind(this)(streamName, err)
-    if (this._state.isConnected) {
-      this.emit('close', {
-        code: 1011,
-        reason: 'MetaMask background communication error.',
-      })
+  /**
+   * Upon receipt of a new chainId and networkVersion, emits corresponding
+   * events and sets relevant public state.
+   * Does nothing if neither the chainId nor the networkVersion are different
+   * from existing values.
+   *
+   * @private
+   * @emits MetamaskInpageProvider#chainChanged
+   * @param {Object} networkInfo - An object with network info.
+   * @param {string} networkInfo.chainId - The latest chain ID.
+   * @param {string} networkInfo.networkVersion - The latest network ID.
+   */
+  _handleChainChanged ({ chainId, networkVersion } = {}) {
+    if (
+      !chainId || typeof chainId !== 'string' || !chainId.startsWith('0x') ||
+      !networkVersion || typeof networkVersion !== 'string'
+    ) {
+      this._log.error(
+        'MetaMask: Received invalid network parameters. Please report this bug.',
+        { chainId, networkVersion },
+      )
+      return
     }
-    this._state.isConnected = false
+
+    if (networkVersion === 'loading') {
+      this._handleDisconnect(true)
+    } else {
+      this._handleConnect(chainId)
+
+      if (chainId !== this.chainId) {
+        this.chainId = chainId
+        if (this._state.initialized) {
+          this.emit('chainChanged', this.chainId)
+        }
+      }
+
+      if (networkVersion !== this.networkVersion) {
+        this.networkVersion = networkVersion
+        if (this._state.initialized) {
+          this.emit('networkChanged', this.networkVersion)
+        }
+      }
+    }
   }
 
   /**
@@ -344,7 +490,7 @@ module.exports = class MetaMaskInpageProvider extends SafeEventEmitter {
 
     // defensive programming
     if (!Array.isArray(accounts)) {
-      log.error(
+      this._log.error(
         'MetaMask: Received non-array accounts parameter. Please report this bug.',
         accounts,
       )
@@ -357,7 +503,7 @@ module.exports = class MetaMaskInpageProvider extends SafeEventEmitter {
       // we should always have the correct accounts even before eth_accounts
       // returns, except in cases where isInternal is true
       if (this._state.isUnlocked && isEthAccounts && this._state.accounts !== undefined && !isInternal) {
-        log.error(
+        this._log.error(
           `MetaMask: 'eth_accounts' unexpectedly updated accounts. Please report this bug.`,
           _accounts,
         )
@@ -388,12 +534,36 @@ module.exports = class MetaMaskInpageProvider extends SafeEventEmitter {
   }
 
   /**
+   * Upon receipt of a new isUnlocked state, sets relevant public state.
+   * Calls the accounts changed handler with the received accounts, or an empty
+   * array.
+   *
+   * Does nothing if the received value is equal to the existing value.
+   * There are no lock/unlock events.
+   *
+   * @private
+   * @param {Object} opts - Options bag.
+   * @param {string[]} [opts.accounts] - The exposed accounts, if any.
+   * @param {boolean} opts.isUnlocked - The latest isUnlocked value.
+   */
+  _handleUnlockStateChanged ({ accounts, isUnlocked }) {
+    if (typeof isUnlocked !== 'boolean') {
+      this._log.error('MetaMask: Received invalid isUnlocked parameter. Please report this bug.')
+      return
+    }
+
+    if (isUnlocked !== this._state.isUnlocked) {
+      this._state.isUnlocked = isUnlocked
+      this._handleAccountsChanged(accounts || [])
+    }
+  }
+
+  /**
    * Constructor helper.
    * Gets experimental _metamask API as Proxy, so that we can warn consumers
    * about its experiment nature.
    */
   _getExperimentalApi () {
-
     return new Proxy(
       {
 
@@ -403,10 +573,10 @@ module.exports = class MetaMaskInpageProvider extends SafeEventEmitter {
          * @returns {Promise<boolean>} - Promise resolving to true if MetaMask is currently unlocked
          */
         isUnlocked: async () => {
-          if (this._state.isUnlocked === undefined) {
-            await new Promise(
-              (resolve) => this.publicConfigStore.once('update', () => resolve()),
-            )
+          if (!this._state.initialized) {
+            await new Promise((resolve) => {
+              this.on('_initialized', () => resolve())
+            })
           }
           return this._state.isUnlocked
         },
@@ -415,7 +585,6 @@ module.exports = class MetaMaskInpageProvider extends SafeEventEmitter {
          * Make a batch RPC request.
          */
         requestBatch: async (requests) => {
-
           if (!Array.isArray(requests)) {
             throw ethErrors.rpc.invalidRequest({
               message: 'Batch requests must be made with an array of request objects.',
@@ -430,38 +599,12 @@ module.exports = class MetaMaskInpageProvider extends SafeEventEmitter {
             )
           })
         },
-
-        // TODO:deprecation:remove isEnabled, isApproved
-        /**
-         * Synchronously determines if this domain is currently enabled, with a potential false negative if called to soon
-         *
-         * @deprecated
-         * @returns {boolean} - returns true if this domain is currently enabled
-         */
-        isEnabled: () => {
-          return Array.isArray(this._state.accounts) && this._state.accounts.length > 0
-        },
-
-        /**
-         * Asynchronously determines if this domain is currently enabled
-         *
-         * @deprecated
-         * @returns {Promise<boolean>} - Promise resolving to true if this domain is currently enabled
-         */
-        isApproved: async () => {
-          if (this._state.accounts === undefined) {
-            await new Promise(
-              (resolve) => this.once('accountsChanged', () => resolve()),
-            )
-          }
-          return Array.isArray(this._state.accounts) && this._state.accounts.length > 0
-        },
       },
       {
         get: (obj, prop) => {
 
           if (!this._state.sentWarnings.experimentalMethods) {
-            log.warn(messages.warnings.experimentalMethods)
+            this._log.warn(messages.warnings.experimentalMethods)
             this._state.sentWarnings.experimentalMethods = true
           }
           return obj[prop]
@@ -481,9 +624,8 @@ module.exports = class MetaMaskInpageProvider extends SafeEventEmitter {
    * @returns {Promise<Array<string>>} - A promise that resolves to an array of addresses.
    */
   enable () {
-
     if (!this._state.sentWarnings.enable) {
-      log.warn(messages.warnings.enableDeprecation)
+      this._log.warn(messages.warnings.enableDeprecation)
       this._state.sentWarnings.enable = true
     }
 
@@ -509,9 +651,8 @@ module.exports = class MetaMaskInpageProvider extends SafeEventEmitter {
    * @returns {unknown} - The method result, or a JSON RPC response object.
    */
   send (methodOrPayload, callbackOrArgs) {
-
     if (!this._state.sentWarnings.send) {
-      log.warn(messages.warnings.sendDeprecation)
+      this._log.warn(messages.warnings.sendDeprecation)
       this._state.sentWarnings.send = true
     }
 
@@ -544,7 +685,6 @@ module.exports = class MetaMaskInpageProvider extends SafeEventEmitter {
    * @deprecated
    */
   _sendSync (payload) {
-
     let result
     switch (payload.method) {
 
@@ -590,4 +730,4 @@ function validateLoggerObject (logger) {
       }
       throw new Error(messages.errors.invalidLoggerObject())
     }
-  }
+}
