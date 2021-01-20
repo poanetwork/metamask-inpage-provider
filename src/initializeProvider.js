@@ -1,4 +1,5 @@
 const MetaMaskInpageProvider = require('./MetaMaskInpageProvider')
+const shimWeb3 = require('./shimWeb3')
 
 /**
  * Initializes a MetaMaskInpageProvider and (optionally) assigns it as window.ethereum.
@@ -19,6 +20,7 @@ function initializeProvider ({
   maxEventListeners = 100,
   shouldSendMetadata = true,
   shouldSetOnWindow = true,
+  shouldShimWeb3 = false,
 } = {}) {
 
   let provider = new MetaMaskInpageProvider(
@@ -38,6 +40,10 @@ function initializeProvider ({
 
   if (shouldSetOnWindow) {
     setGlobalProvider(provider)
+  }
+
+  if (shouldShimWeb3) {
+    shimWeb3(provider, logger)
   }
 
   return provider

@@ -1,8 +1,9 @@
 module.exports = {
   errors: {
-    disconnected: () => `MetaMask: Lost connection to MetaMask background process.`,
+    disconnected: () => 'MetaMask: Disconnected from chain. Attempting to connect.',
+    permanentlyDisconnected: () => 'MetaMask: Disconnected from MetaMask background. Page reload required.',
     sendSiteMetadata: () => `MetaMask: Failed to send site metadata. This is an internal error, please report this bug.`,
-    unsupportedSync: (method) => `MetaMask: The MetaMask Web3 object does not support synchronous methods like ${method} without a callback parameter.`,
+    unsupportedSync: (method) => `MetaMask: The MetaMask Ethereum provider does not support synchronous methods like ${method} without a callback parameter.`,
     invalidDuplexStream: () => 'Must provide a Node.js-style duplex stream.',
     invalidOptions: (maxEventListeners, shouldSendMetadata) => `Invalid options. Received: { maxEventListeners: ${maxEventListeners}, shouldSendMetadata: ${shouldSendMetadata} }`,
     invalidRequestArgs: () => `Expected a single, non-array, object argument.`,
@@ -11,14 +12,20 @@ module.exports = {
     invalidLoggerObject: () => `'args.logger' must be an object if provided.`,
     invalidLoggerMethod: (method) => `'args.logger' must include required method '${method}'.`,
   },
+  info: {
+    connected: (chainId) => `MetaMask: Connected to chain with ID "${chainId}".`,
+  },
   warnings: {
-    // TODO:deprecate:2020-Q1
-    autoReloadDeprecation: `MetaMask: MetaMask will stop reloading pages on network change in Q1 2020. For more information, see: https://medium.com/metamask/no-longer-reloading-pages-on-network-change-fbf041942b44 \nSet 'ethereum.autoRefreshOnNetworkChange' to 'false' to silence this warning: https://metamask.github.io/metamask-docs/API_Reference/Ethereum_Provider#ethereum.autorefreshonnetworkchange`,
-    sendSyncDeprecation: `MetaMask: 'ethereum.send(...)' will return result-resolving Promises for all methods starting in Q1 2020. For more information, see: https://medium.com/metamask/deprecating-synchronous-provider-methods-82f0edbc874b`,
-    // deprecated stuff yet to be scheduled for removal
-    enableDeprecation: `MetaMask: 'ethereum.enable()' is deprecated and may be removed in the future. Please use "ethereum.send('eth_requestAccounts')" instead. For more information, see: https://eips.ethereum.org/EIPS/eip-1102`,
-    isConnectedDeprecation: `MetaMask: 'ethereum.isConnected()' is deprecated and may be removed in the future. Please listen for the relevant events instead. For more information, see: https://eips.ethereum.org/EIPS/eip-1193`,
-    sendAsyncDeprecation: `MetaMask: 'ethereum.sendAsync(...)' is deprecated and may be removed in the future. Please use 'ethereum.send(method: string, params: Array<any>)' instead. For more information, see: https://eips.ethereum.org/EIPS/eip-1193`,
+    // deprecated methods
+    enableDeprecation: `MetaMask: 'ethereum.enable()' is deprecated and may be removed in the future. Please use the 'eth_requestAccounts' RPC method instead.\nFor more information, see: https://eips.ethereum.org/EIPS/eip-1102`,
+    sendDeprecation: `MetaMask: 'ethereum.send(...)' is deprecated and may be removed in the future. Please use 'ethereum.sendAsync(...)' or 'ethereum.request(...)' instead.\nFor more information, see: https://eips.ethereum.org/EIPS/eip-1193`,
+    // deprecated events
+    events: {
+      close: `MetaMask: The event 'close' is deprecated and may be removed in the future. Please use 'disconnect' instead.\nFor more information, see: https://eips.ethereum.org/EIPS/eip-1193`,
+      data: `MetaMask: The event 'data' is deprecated and may be removed in the future.`,
+      networkChanged: `MetaMask: The event 'networkChanged' is deprecated and may be removed in the future. Please use 'chainChanged' instead.\nFor more information, see: https://eips.ethereum.org/EIPS/eip-1193`,
+      notification: `MetaMask: The event 'notification' is deprecated and may be removed in the future. Please use 'message' instead.\nFor more information, see: https://eips.ethereum.org/EIPS/eip-1193`,
+    },
     // misc
     experimentalMethods: `MetaMask: 'ethereum._metamask' exposes non-standard, experimental methods. They may be removed or changed without warning.`,
   },

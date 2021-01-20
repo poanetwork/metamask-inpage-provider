@@ -13,8 +13,8 @@ const messages = require('./messages')
 const {
   createErrorMiddleware,
   EMITTED_NOTIFICATIONS,
-  logStreamDisconnectWarning,
   getRpcPromiseCallback,
+  logStreamDisconnectWarning,
   NOOP,
 } = require('./utils')
 
@@ -78,26 +78,39 @@ module.exports = class MetaMaskInpageProvider extends SafeEventEmitter {
 
     // private state, kept here in part for use in the _metamask proxy
     this._state = {
-      sentWarnings: {
-        enable: false,
-        experimentalMethods: false,
-        send: false,
-      },
-      isConnected: undefined,
-      accounts: undefined,
-      isUnlocked: undefined,
+        sentWarnings: {
+          // methods
+          enable: false,
+          experimentalMethods: false,
+          send: false,
+          // events
+          events: {
+            close: false,
+            data: false,
+            networkChanged: false,
+            notification: false,
+          },
+        },
+        accounts: null,
+        isConnected: false,
+        isUnlocked: false,
+        initialized: false,
+        isPermanentlyDisconnected: false,
     }
 
     this._metamask = this._getExperimentalApi()
 
     // public state
     this.selectedAddress = null
-    this.networkVersion = undefined
-    this.chainId = undefined
+    this.networkVersion = null
+    this.chainId = null
 
     // bind functions (to prevent e.g. web3@1.x from making unbound calls)
     this._handleAccountsChanged = this._handleAccountsChanged.bind(this)
+    this._handleConnect = this._handleConnect.bind(this)
+    this._handleChainChanged = this._handleChainChanged.bind(this)
     this._handleDisconnect = this._handleDisconnect.bind(this)
+    this._handleStreamDisconnect = this._handleStreamDisconnect.bind(this)
     this._sendSync = this._sendSync.bind(this)
     this._rpcRequest = this._rpcRequest.bind(this)
     this.enable = this.enable.bind(this)
@@ -195,39 +208,17 @@ module.exports = class MetaMaskInpageProvider extends SafeEventEmitter {
       }
     })
 
-    // indicate that we've connected, for EIP-1193 compliance
-    setTimeout(() => this.emit('connect'))
-
-    // TODO:deprecate:2020-Q1
-    this._web3Ref = undefined
-
-    // TODO:deprecate:2020-Q1
-    // give the dapps control of a refresh they can toggle this off on the window.ethereum
-    // this will be default true so it does not break any old apps.
-    this.autoRefreshOnNetworkChange = true
-
-    // TODO:deprecate:2020-Q1
-    // wait a second to attempt to send this, so that the warning can be silenced
-    // moved this here because there's another warning in .enable() discouraging
-    // the use thereof per EIP 1102
-    setTimeout(() => {
-      if (this.autoRefreshOnNetworkChange && !this._state.sentWarnings.autoReload) {
-        this._log.warn(messages.warnings.autoReloadDeprecation)
-        this._state.sentWarnings.autoReload = true
-      }
-    }, 1000)
   }
+
+  //====================
+  // Public Methods
+  //====================
 
   /**
    * Deprecated.
    * Returns whether the inpage provider is connected to MetaMask.
    */
   isConnected () {
-
-    if (!this._state.sentWarnings.isConnected) {
-      this._log.warn(messages.warnings.isConnectedDeprecation)
-      this._state.sentWarnings.isConnected = true
-    }
     return this._state.isConnected
   }
 
